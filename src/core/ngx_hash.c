@@ -24,8 +24,9 @@ ngx_hash_find(ngx_hash_t *hash, ngx_uint_t key, u_char *name, size_t len)
     if (elt == NULL) {
         return NULL;
     }
-
+    int cnt = 0;
     while (elt->value) {
+        cnt++;
         if (len != (size_t) elt->len) {
             goto next;
         }
@@ -35,7 +36,7 @@ ngx_hash_find(ngx_hash_t *hash, ngx_uint_t key, u_char *name, size_t len)
                 goto next;
             }
         }
-
+        ngx_log_error(NGX_LOG_ALERT, ngx_cycle->log, 0, "hf:\"%*s\" --cnt: %d --size: %d", len, name, cnt, hash->size);
         return elt->value;
 
     next:
@@ -44,7 +45,7 @@ ngx_hash_find(ngx_hash_t *hash, ngx_uint_t key, u_char *name, size_t len)
                                                sizeof(void *));
         continue;
     }
-
+    ngx_log_error(NGX_LOG_ALERT, ngx_cycle->log, 0, "hf:\"%*s\" --cnt: %d --size: %d", len, name, cnt, hash->size);
     return NULL;
 }
 
@@ -264,8 +265,10 @@ ngx_hash_init(ngx_hash_init_t *hinit, ngx_hash_key_t *names, ngx_uint_t nelts)
                       hinit->name, hinit->name, hinit->max_size);
         return NGX_ERROR;
     }
-
+    ngx_uint_t max_var_size = 0;
+    ngx_uint_t total_var_size = 0;
     for (n = 0; n < nelts; n++) {
+        ngx_uint_t var_size = NGX_HASH_ELT_SIZE(&names[n]) + sizeof(void *);
         if (hinit->bucket_size < NGX_HASH_ELT_SIZE(&names[n]) + sizeof(void *))
         {
             ngx_log_error(NGX_LOG_EMERG, hinit->pool->log, 0,
@@ -274,22 +277,46 @@ ngx_hash_init(ngx_hash_init_t *hinit, ngx_hash_key_t *names, ngx_uint_t nelts)
                           hinit->name, hinit->name, hinit->bucket_size);
             return NGX_ERROR;
         }
+        total_var_size += var_size;
+        if (max_var_size < var_size)
+            max_var_size = var_size;
+        if (NULL == names[n].key.data){
+            ngx_log_error(NGX_LOG_EMERG, hinit->pool->log, 0, "ngx_hash_init error var %i", n);
+            continue;
+        }
+        //ngx_log_error(NGX_LOG_EMERG, hinit->pool->log, 0,
+        //                  "ngx_hash_init print_var build %s... "
+                      //"build var \"%V\": (%i %i)( %i/%i) %i",
+                      //hinit->name, &(names[n].key), hinit->bucket_size, hinit->max_size, n, nelts, var_size);
+        //              "build var \"%*s\": (%i %i)( %i/%i) %i",
+        //              hinit->name, names[n].key.len, names[n].key.data, hinit->bucket_size, hinit->max_size, n, nelts, var_size);
+                      //"build var %i: (%i %i)( %i/%i) %i",
+                      //hinit->name, names[n].key.len, hinit->bucket_size, hinit->max_size, n, nelts, var_size);                      
     }
-
+    int bsize = 5;
+    if (nelts > 0 && bsize*(total_var_size/nelts) > max_var_size)
+        hinit->bucket_size = bsize*(total_var_size/nelts);
+    else
+        hinit->bucket_size = max_var_size;
+    ngx_log_error(NGX_LOG_EMERG, hinit->pool->log, 0, "ngx_hash_init end check bucket_size, build %s, var size %i, (%i %i)", hinit->name, n, hinit->bucket_size, hinit->max_size);
     test = ngx_alloc(hinit->max_size * sizeof(u_short), hinit->pool->log);
     if (test == NULL) {
         return NGX_ERROR;
     }
-
     bucket_size = hinit->bucket_size - sizeof(void *);
-
-    start = nelts / (bucket_size / (2 * sizeof(void *)));
+    //start = nelts / (bucket_size / (2 * sizeof(void *)));
+    start = nelts;
     start = start ? start : 1;
 
     if (hinit->max_size > 10000 && nelts && hinit->max_size / nelts < 100) {
         start = hinit->max_size - 1000;
     }
-
+    ngx_log_error(NGX_LOG_EMERG, hinit->pool->log, 0,
+                          "ngx_hash_init start confirm size... "
+                          "name %s start(%i) max_size(%i)",
+                      hinit->name, start, hinit->max_size);
+    if (hinit->max_size < 20*nelts)
+        hinit->max_size = 20*nelts;
     for (size = start; size <= hinit->max_size; size++) {
 
         ngx_memzero(test, size * sizeof(u_short));
@@ -312,7 +339,10 @@ ngx_hash_init(ngx_hash_init_t *hinit, ngx_hash_key_t *names, ngx_uint_t nelts)
                 goto next;
             }
         }
-
+        ngx_log_error(NGX_LOG_EMERG, hinit->pool->log, 0,
+                          "ngx_hash_init confirm size "
+                          "name %s bucket_cnt(%i) var_cnt(%i) bucket_size(%i) max_size(%i)",
+                      hinit->name, size, nelts, hinit->bucket_size, hinit->max_size);
         goto found;
 
     next:
@@ -390,7 +420,6 @@ found:
 
         buckets[i] = (ngx_hash_elt_t *) elts;
         elts += test[i];
-
     }
 
     for (i = 0; i < size; i++) {
